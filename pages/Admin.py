@@ -25,7 +25,6 @@ if admin_pass != expected_pass:
     st.warning("Please enter the admin password in the sidebar and click 'Log In' to view this page.")
     st.stop()
 
-# Create Tabs for Organization
 tab_analytics, tab_setup = st.tabs(["📊 Live Analytics", "⚙️ Setup & Inventory"])
 
 # -----------------------------------------
@@ -33,22 +32,53 @@ tab_analytics, tab_setup = st.tabs(["📊 Live Analytics", "⚙️ Setup & Inven
 # -----------------------------------------
 with tab_setup:
     st.header("1. Create a New Promotion Event")
-    st.write("Creating a new event will automatically make it the active promotion on the main wheel.")
-    
     with st.form("new_event_form"):
         event_name = st.text_input("Event Name (e.g., Summer Concert Promo)")
         submit_event = st.form_submit_button("Create & Activate Event")
         
         if submit_event and event_name:
-            supabase.table("events").update({"is_active": False}).neq("name", "placeholder").execute()
-            supabase.table("events").insert({"name": event_name, "is_active": True}).execute()
-            st.success(f"Event '{event_name}' created successfully!")
+            # Set all other active events to 'Completed' to prevent overlap
+            supabase.table("events").update({"status": "Completed"}).eq("status", "Active").execute()
+            # Insert the new event as Active
+            supabase.table("events").insert({"name": event_name, "status": "Active"}).execute()
+            st.success(f"Event '{event_name}' created and activated!")
             st.rerun() 
 
     st.divider()
+    
+    # --- NEW EVENT STATUS MANAGER ---
+    st.header("2. Manage Event Status")
+    all_events_manage = supabase.table("events").select("*").execute()
+    
+    if all_events_manage.data:
+        event_dict_manage = {e['name']: e for e in all_events_manage.data}
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            selected_manage_name = st.selectbox("Select an Event to Update:", options=["-- Select an Event --"] + list(event_dict_manage.keys()))
+        
+        if selected_manage_name != "-- Select an Event --":
+            selected_event_manage = event_dict_manage[selected_manage_name]
+            current_status = selected_event_manage.get('status', 'Completed')
+            
+            with col2:
+                new_status = st.radio("Set Status:", options=["Active", "Paused", "Completed"], index=["Active", "Paused", "Completed"].index(current_status))
+                
+            if st.button("Update Event Status", type="primary"):
+                # If setting to Active, ensure no other event is Active
+                if new_status == "Active":
+                    supabase.table("events").update({"status": "Paused"}).eq("status", "Active").execute()
+                    
+                supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
+                st.success(f"'{selected_manage_name}' is now {new_status}!")
+                st.rerun()
+    else:
+        st.info("No events found.")
 
-    st.header("2. Add Prizes to Active Event")
-    active_events = supabase.table("events").select("*").eq("is_active", True).execute()
+    st.divider()
+
+    st.header("3. Add Prizes to Active Event")
+    active_events = supabase.table("events").select("*").eq("status", "Active").execute()
     
     if active_events.data:
         current_event = active_events.data[0]
@@ -78,16 +108,11 @@ with tab_setup:
                 
         st.divider()
 
-        # --- NEW MANAGE PRIZES SECTION ---
-        st.header("3. Manage Existing Prizes")
-        
-        # Fetch prizes for the current active event
+        st.header("4. Manage Existing Prizes")
         current_prizes = supabase.table("prizes").select("*").eq("event_id", current_event['id']).execute()
         
         if current_prizes.data:
-            # Create a dictionary to easily map the selected name back to its full database row
             prize_dict = {p['name']: p for p in current_prizes.data}
-            
             selected_prize_name = st.selectbox("Select a prize to edit or delete:", options=["-- Select a Prize --"] + list(prize_dict.keys()))
             
             if selected_prize_name != "-- Select a Prize --":
@@ -97,7 +122,6 @@ with tab_setup:
                     with st.form(f"edit_form_{selected_prize['id']}"):
                         col1, col2 = st.columns(2)
                         col3, col4 = st.columns(2)
-                        
                         with col1:
                             new_name = st.text_input("Name", value=selected_prize['name'])
                         with col2:
@@ -111,40 +135,52 @@ with tab_setup:
                         
                         if submit_update:
                             supabase.table("prizes").update({
-                                "name": new_name,
-                                "value": new_value,
-                                "total_quantity": new_total,
-                                "remaining_quantity": new_remaining
+                                "name": new_name, "value": new_value,
+                                "total_quantity": new_total, "remaining_quantity": new_remaining
                             }).eq("id", selected_prize['id']).execute()
                             st.success("Prize updated successfully!")
                             st.rerun()
                     
-                    # Delete button placed outside the form to prevent accidental submission
-                    st.write("---")
                     if st.button("🚨 Delete This Prize", type="primary"):
                         supabase.table("prizes").delete().eq("id", selected_prize['id']).execute()
-                        st.success(f"Prize '{selected_prize['name']}' deleted!")
+                        st.success("Prize deleted!")
                         st.rerun()
         else:
-            st.info("No prizes available to manage for this event.")
-            
+            st.info("No prizes available for this event.")
     else:
-        st.warning("Please create an active event above before managing prizes.")
+        st.warning("Please ensure an event is 'Active' before managing prizes.")
 
 # -----------------------------------------
-# TAB 1: LIVE ANALYTICS
+# TAB 1: EVENT ANALYTICS
 # -----------------------------------------
 with tab_analytics:
-    st.header("Live Event Analytics")
+    st.header("Event Analytics")
 
-    event_response = supabase.table("events").select("*").eq("is_active", True).execute()
+    all_events_response = supabase.table("events").select("*").order("name").execute()
 
-    if event_response.data:
-        current_event = event_response.data[0]
-        st.subheader(f"Active Event: {current_event['name']}")
+    if all_events_response.data:
+        event_dict = {e['name']: e for e in all_events_response.data}
         
-        st.markdown("### Current Prize Inventory")
-        prizes = supabase.table("prizes").select("*").eq("event_id", current_event['id']).execute()
+        # Default to the active event if one exists
+        active_event_name = next((e['name'] for e in all_events_response.data if e.get('status') == 'Active'), None)
+        default_index = list(event_dict.keys()).index(active_event_name) if active_event_name in event_dict else 0
+
+        selected_event_name = st.selectbox("Select an Event to View:", options=list(event_dict.keys()), index=default_index)
+        selected_event = event_dict[selected_event_name]
+        
+        # Display the current status visually
+        status = selected_event.get('status', 'Completed')
+        if status == 'Active':
+            st.success(f"🟢 **{selected_event['name']}** is currently ACTIVE.")
+        elif status == 'Paused':
+            st.warning(f"⏸️ **{selected_event['name']}** is currently PAUSED.")
+        else:
+            st.info(f"⚪ **{selected_event['name']}** is COMPLETED.")
+
+        st.divider()
+        
+        st.markdown("### Prize Inventory")
+        prizes = supabase.table("prizes").select("*").eq("event_id", selected_event['id']).execute()
         
         if prizes.data:
             prize_df = pd.DataFrame(prizes.data)
@@ -153,32 +189,23 @@ with tab_analytics:
             )
             st.dataframe(display_prizes, hide_index=True, use_container_width=True)
         else:
-            st.info("No prizes added yet. Go to the Setup tab to add inventory.")
+            st.info("No prizes associated with this event.")
         
         st.markdown("### PSR Winners List")
-        spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, prizes(name)").eq("event_id", current_event['id']).execute()
+        spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, prizes(name)").eq("event_id", selected_event['id']).execute()
         
         if spins.data:
-            winners = []
-            for s in spins.data:
-                winners.append({
-                    "First Name": s.get("first_name"),
-                    "Last Name": s.get("last_name"),
-                    "Email": s.get("email"),
-                    "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown",
-                    "Time Claimed": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""
-                })
-            
+            winners = [{"First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Email": s.get("email"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", "Time Claimed": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""} for s in spins.data]
             winners_df = pd.DataFrame(winners)
             st.dataframe(winners_df, hide_index=True, use_container_width=True)
             
             st.download_button(
-                label="Download Winners List (CSV)",
+                label=f"Download {selected_event_name} Winners (CSV)",
                 data=winners_df.to_csv(index=False).encode('utf-8'),
-                file_name="psr_winners_list.csv",
+                file_name=f"{selected_event_name.replace(' ', '_').lower()}_winners.csv",
                 mime="text/csv"
             )
         else:
-            st.info("No winners yet. The list will populate here as guests claim prizes.")
+            st.info("No winners recorded for this event yet.")
     else:
-        st.error("No active events found. Go to the Setup tab to create one.")
+        st.error("No events found in the database. Go to the Setup tab to create one.")
