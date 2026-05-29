@@ -10,16 +10,15 @@ st.set_page_config(page_title="Unity Spin to Win", page_icon="🎸", layout="cen
 
 st.markdown("""
 <style>
-    /* Hide standard Streamlit header and footer for an 'app-like' feel */
+    /* Hide standard Streamlit top-right menu and footer, but KEEP the header so you can open the sidebar */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
     /* Reduce top padding for mobile screens so the logo is at the top */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
-        max-width: 500px; /* Keeps it looking like a phone screen even if opened on desktop */
+        max-width: 500px; 
     }
     
     /* Make buttons huge and thumb-friendly */
@@ -28,7 +27,7 @@ st.markdown("""
         font-size: 20px;
         font-weight: bold;
         border-radius: 12px;
-        background-color: #e11c2a; /* Unity Red */
+        background-color: #e11c2a; 
         color: white;
         border: none;
     }
