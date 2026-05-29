@@ -11,14 +11,19 @@ supabase = init_connection()
 
 st.title("Unity by Hard Rock: Spin to Win")
 
-# 1. Fetch active event
-event_response = supabase.table("events").select("*").eq("is_active", True).execute()
+# 1. Fetch active or paused event
+event_response = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
 
 if not event_response.data:
-    st.error("There are no active promotions at this time.")
+    st.error("There are no active promotions at this time. Please check back later!")
     st.stop()
 
 current_event = event_response.data[0]
+
+# Block the wheel if the event is paused
+if current_event['status'] == 'Paused':
+    st.warning("⏸️ The prize wheel is temporarily paused for restocking. Please check back in a few minutes!")
+    st.stop()
 
 # Initialize session state variables
 if "won_prize" not in st.session_state:
