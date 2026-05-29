@@ -13,13 +13,16 @@ supabase = init_connection()
 
 st.title("Promotion Admin Console")
 
-# Simple security checkpoint
-# It will check your advanced settings for an admin password, defaulting to "HardRock2026" if none is set
-admin_pass = st.sidebar.text_input("Admin Password", type="password")
+# Improved security checkpoint with a button
+with st.sidebar.form("login_form"):
+    st.header("Admin Login")
+    admin_pass = st.text_input("Password", type="password")
+    submit_login = st.form_submit_button("Log In")
+
 expected_pass = st.secrets.get("ADMIN_PASSWORD", "HardRock2026")
 
 if admin_pass != expected_pass:
-    st.warning("Please enter the admin password in the sidebar to view this page.")
+    st.warning("Please enter the admin password in the sidebar and click 'Log In' to view this page.")
     st.stop()
 
 st.header("Live Event Analytics")
