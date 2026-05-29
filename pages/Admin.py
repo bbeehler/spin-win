@@ -25,10 +25,123 @@ if admin_pass != expected_pass:
     st.warning("Please enter the admin password in the sidebar and click 'Log In' to view this page.")
     st.stop()
 
-tab_analytics, tab_setup = st.tabs(["📊 Live Analytics", "⚙️ Setup & Inventory"])
+# Reordered tabs to put Verification first for the desk staff
+tab_verify, tab_analytics, tab_setup = st.tabs(["✅ Verify Winner", "📊 Event Analytics", "⚙️ Setup & Inventory"])
 
 # -----------------------------------------
-# TAB 2: SETUP & INVENTORY
+# TAB 1: VERIFY WINNER (PSR KIOSK)
+# -----------------------------------------
+with tab_verify:
+    st.header("PSR Verification Kiosk")
+    st.write("Enter the claim code from the guest's screenshot to verify their identity and redeem the prize.")
+    
+    verify_code = st.text_input("Enter Claim Code (e.g., HR-XXXXXX)").strip().upper()
+    
+    if verify_code:
+        # Look up the code in the spins table
+        spin_record = supabase.table("spins").select("*, prizes(name)").eq("claim_code", verify_code).execute()
+        
+        if spin_record.data:
+            record = spin_record.data[0]
+            
+            st.markdown("### Database Match Found")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Name:** {record['first_name']} {record['last_name']}")
+                st.write(f"**Email:** {record['email']}")
+            with col2:
+                st.write(f"**Prize:** {record['prizes']['name'] if record['prizes'] else 'Unknown'}")
+                st.write(f"**Claim Code:** `{record['claim_code']}`")
+                
+            st.divider()
+            
+            # Check if it was already used
+            if record.get('is_redeemed'):
+                st.error("🚨 FRAUD ALERT: THIS CODE HAS ALREADY BEEN REDEEMED. 🚨")
+                st.write("Do not issue a prize. This screenshot has already been used.")
+            else:
+                st.success("✅ Code is valid and unredeemed.")
+                st.warning(f"Please verify the guest's physical ID matches the name: **{record['first_name']} {record['last_name']}**")
+                
+                # Burn the code button
+                if st.button("Mark as Redeemed & Issue Prize", type="primary"):
+                    supabase.table("spins").update({"is_redeemed": True}).eq("id", record['id']).execute()
+                    st.success("Prize successfully marked as redeemed! The code is now burned.")
+                    st.rerun()
+        else:
+            st.error("❌ Invalid Claim Code. No match found in the database. Do not issue prize.")
+
+# -----------------------------------------
+# TAB 2: EVENT ANALYTICS
+# -----------------------------------------
+with tab_analytics:
+    st.header("Event Analytics")
+
+    all_events_response = supabase.table("events").select("*").order("name").execute()
+
+    if all_events_response.data:
+        event_dict = {e['name']: e for e in all_events_response.data}
+        active_event_name = next((e['name'] for e in all_events_response.data if e.get('status') == 'Active'), None)
+        default_index = list(event_dict.keys()).index(active_event_name) if active_event_name in event_dict else 0
+
+        selected_event_name = st.selectbox("Select an Event to View:", options=list(event_dict.keys()), index=default_index)
+        selected_event = event_dict[selected_event_name]
+        
+        status = selected_event.get('status', 'Completed')
+        if status == 'Active':
+            st.success(f"🟢 **{selected_event['name']}** is currently ACTIVE.")
+        elif status == 'Paused':
+            st.warning(f"⏸️ **{selected_event['name']}** is currently PAUSED.")
+        else:
+            st.info(f"⚪ **{selected_event['name']}** is COMPLETED.")
+
+        st.divider()
+        
+        st.markdown("### Prize Inventory")
+        prizes = supabase.table("prizes").select("*").eq("event_id", selected_event['id']).execute()
+        
+        if prizes.data:
+            prize_df = pd.DataFrame(prizes.data)
+            display_prizes = prize_df[['name', 'value', 'total_quantity', 'remaining_quantity']].rename(
+                columns={'name': 'Prize', 'value': 'Value ($)', 'total_quantity': 'Total', 'remaining_quantity': 'Remaining'}
+            )
+            st.dataframe(display_prizes, hide_index=True, use_container_width=True)
+        else:
+            st.info("No prizes associated with this event.")
+        
+        st.markdown("### PSR Winners List")
+        # Included is_redeemed in the data pull
+        spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, claim_code, is_redeemed, prizes(name)").eq("event_id", selected_event['id']).execute()
+        
+        if spins.data:
+            winners = []
+            for s in spins.data:
+                winners.append({
+                    "Code": s.get("claim_code"),
+                    "Status": "Redeemed" if s.get("is_redeemed") else "Pending",
+                    "First Name": s.get("first_name"), 
+                    "Last Name": s.get("last_name"), 
+                    "Email": s.get("email"), 
+                    "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", 
+                    "Time Claimed": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""
+                })
+                
+            winners_df = pd.DataFrame(winners)
+            st.dataframe(winners_df, hide_index=True, use_container_width=True)
+            
+            st.download_button(
+                label=f"Download {selected_event_name} Winners (CSV)",
+                data=winners_df.to_csv(index=False).encode('utf-8'),
+                file_name=f"{selected_event_name.replace(' ', '_').lower()}_winners.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No winners recorded for this event yet.")
+    else:
+        st.error("No events found in the database. Go to the Setup tab to create one.")
+
+# -----------------------------------------
+# TAB 3: SETUP & INVENTORY
 # -----------------------------------------
 with tab_setup:
     st.header("1. Create a New Promotion Event")
@@ -37,22 +150,18 @@ with tab_setup:
         submit_event = st.form_submit_button("Create & Activate Event")
         
         if submit_event and event_name:
-            # Set all other active events to 'Completed' to prevent overlap
             supabase.table("events").update({"status": "Completed"}).eq("status", "Active").execute()
-            # Insert the new event as Active
             supabase.table("events").insert({"name": event_name, "status": "Active"}).execute()
             st.success(f"Event '{event_name}' created and activated!")
             st.rerun() 
 
     st.divider()
     
-    # --- NEW EVENT STATUS MANAGER ---
     st.header("2. Manage Event Status")
     all_events_manage = supabase.table("events").select("*").execute()
     
     if all_events_manage.data:
         event_dict_manage = {e['name']: e for e in all_events_manage.data}
-        
         col1, col2 = st.columns([2, 1])
         with col1:
             selected_manage_name = st.selectbox("Select an Event to Update:", options=["-- Select an Event --"] + list(event_dict_manage.keys()))
@@ -65,10 +174,8 @@ with tab_setup:
                 new_status = st.radio("Set Status:", options=["Active", "Paused", "Completed"], index=["Active", "Paused", "Completed"].index(current_status))
                 
             if st.button("Update Event Status", type="primary"):
-                # If setting to Active, ensure no other event is Active
                 if new_status == "Active":
                     supabase.table("events").update({"status": "Paused"}).eq("status", "Active").execute()
-                    
                 supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
                 st.success(f"'{selected_manage_name}' is now {new_status}!")
                 st.rerun()
@@ -98,10 +205,8 @@ with tab_setup:
             if submit_prize and prize_name:
                 supabase.table("prizes").insert({
                     "event_id": current_event['id'],
-                    "name": prize_name,
-                    "value": prize_value,
-                    "total_quantity": prize_qty,
-                    "remaining_quantity": prize_qty
+                    "name": prize_name, "value": prize_value,
+                    "total_quantity": prize_qty, "remaining_quantity": prize_qty
                 }).execute()
                 st.success(f"Added {prize_qty}x {prize_name} to the vault!")
                 st.rerun()
@@ -149,63 +254,3 @@ with tab_setup:
             st.info("No prizes available for this event.")
     else:
         st.warning("Please ensure an event is 'Active' before managing prizes.")
-
-# -----------------------------------------
-# TAB 1: EVENT ANALYTICS
-# -----------------------------------------
-with tab_analytics:
-    st.header("Event Analytics")
-
-    all_events_response = supabase.table("events").select("*").order("name").execute()
-
-    if all_events_response.data:
-        event_dict = {e['name']: e for e in all_events_response.data}
-        
-        # Default to the active event if one exists
-        active_event_name = next((e['name'] for e in all_events_response.data if e.get('status') == 'Active'), None)
-        default_index = list(event_dict.keys()).index(active_event_name) if active_event_name in event_dict else 0
-
-        selected_event_name = st.selectbox("Select an Event to View:", options=list(event_dict.keys()), index=default_index)
-        selected_event = event_dict[selected_event_name]
-        
-        # Display the current status visually
-        status = selected_event.get('status', 'Completed')
-        if status == 'Active':
-            st.success(f"🟢 **{selected_event['name']}** is currently ACTIVE.")
-        elif status == 'Paused':
-            st.warning(f"⏸️ **{selected_event['name']}** is currently PAUSED.")
-        else:
-            st.info(f"⚪ **{selected_event['name']}** is COMPLETED.")
-
-        st.divider()
-        
-        st.markdown("### Prize Inventory")
-        prizes = supabase.table("prizes").select("*").eq("event_id", selected_event['id']).execute()
-        
-        if prizes.data:
-            prize_df = pd.DataFrame(prizes.data)
-            display_prizes = prize_df[['name', 'value', 'total_quantity', 'remaining_quantity']].rename(
-                columns={'name': 'Prize', 'value': 'Value ($)', 'total_quantity': 'Total', 'remaining_quantity': 'Remaining'}
-            )
-            st.dataframe(display_prizes, hide_index=True, use_container_width=True)
-        else:
-            st.info("No prizes associated with this event.")
-        
-        st.markdown("### PSR Winners List")
-        spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, prizes(name)").eq("event_id", selected_event['id']).execute()
-        
-        if spins.data:
-            winners = [{"First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Email": s.get("email"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", "Time Claimed": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""} for s in spins.data]
-            winners_df = pd.DataFrame(winners)
-            st.dataframe(winners_df, hide_index=True, use_container_width=True)
-            
-            st.download_button(
-                label=f"Download {selected_event_name} Winners (CSV)",
-                data=winners_df.to_csv(index=False).encode('utf-8'),
-                file_name=f"{selected_event_name.replace(' ', '_').lower()}_winners.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No winners recorded for this event yet.")
-    else:
-        st.error("No events found in the database. Go to the Setup tab to create one.")
