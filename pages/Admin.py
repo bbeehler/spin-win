@@ -40,29 +40,24 @@ with tab_setup:
         submit_event = st.form_submit_button("Create & Activate Event")
         
         if submit_event and event_name:
-            # First, set all existing events to inactive so the wheel doesn't get confused
             supabase.table("events").update({"is_active": False}).neq("name", "placeholder").execute()
-            
-            # Now, insert the new active event
             supabase.table("events").insert({"name": event_name, "is_active": True}).execute()
             st.success(f"Event '{event_name}' created successfully!")
-            st.rerun() # Refresh the page to update the UI instantly
+            st.rerun() 
 
     st.divider()
 
     st.header("2. Add Prizes to Active Event")
-    
-    # Check if there is an active event to add prizes to
     active_events = supabase.table("events").select("*").eq("is_active", True).execute()
     
     if active_events.data:
         current_event = active_events.data[0]
-        st.info(f"Currently adding inventory to: **{current_event['name']}**")
+        st.info(f"Currently managing inventory for: **{current_event['name']}**")
         
         with st.form("new_prize_form"):
             col1, col2, col3 = st.columns(3)
             with col1:
-                prize_name = st.text_input("Prize Name (e.g., Unity T-Shirt)")
+                prize_name = st.text_input("Prize Name")
             with col2:
                 prize_value = st.number_input("Value ($)", min_value=0.0, value=15.0)
             with col3:
@@ -71,7 +66,6 @@ with tab_setup:
             submit_prize = st.form_submit_button("Add Prize to Inventory")
             
             if submit_prize and prize_name:
-                # Insert the prize and link it to the current event ID
                 supabase.table("prizes").insert({
                     "event_id": current_event['id'],
                     "name": prize_name,
@@ -81,8 +75,61 @@ with tab_setup:
                 }).execute()
                 st.success(f"Added {prize_qty}x {prize_name} to the vault!")
                 st.rerun()
+                
+        st.divider()
+
+        # --- NEW MANAGE PRIZES SECTION ---
+        st.header("3. Manage Existing Prizes")
+        
+        # Fetch prizes for the current active event
+        current_prizes = supabase.table("prizes").select("*").eq("event_id", current_event['id']).execute()
+        
+        if current_prizes.data:
+            # Create a dictionary to easily map the selected name back to its full database row
+            prize_dict = {p['name']: p for p in current_prizes.data}
+            
+            selected_prize_name = st.selectbox("Select a prize to edit or delete:", options=["-- Select a Prize --"] + list(prize_dict.keys()))
+            
+            if selected_prize_name != "-- Select a Prize --":
+                selected_prize = prize_dict[selected_prize_name]
+                
+                with st.expander(f"Editing: {selected_prize['name']}", expanded=True):
+                    with st.form(f"edit_form_{selected_prize['id']}"):
+                        col1, col2 = st.columns(2)
+                        col3, col4 = st.columns(2)
+                        
+                        with col1:
+                            new_name = st.text_input("Name", value=selected_prize['name'])
+                        with col2:
+                            new_value = st.number_input("Value ($)", min_value=0.0, value=float(selected_prize['value']))
+                        with col3:
+                            new_total = st.number_input("Total Quantity", min_value=0, value=int(selected_prize['total_quantity']))
+                        with col4:
+                            new_remaining = st.number_input("Remaining Quantity", min_value=0, value=int(selected_prize['remaining_quantity']))
+                            
+                        submit_update = st.form_submit_button("Save Changes")
+                        
+                        if submit_update:
+                            supabase.table("prizes").update({
+                                "name": new_name,
+                                "value": new_value,
+                                "total_quantity": new_total,
+                                "remaining_quantity": new_remaining
+                            }).eq("id", selected_prize['id']).execute()
+                            st.success("Prize updated successfully!")
+                            st.rerun()
+                    
+                    # Delete button placed outside the form to prevent accidental submission
+                    st.write("---")
+                    if st.button("🚨 Delete This Prize", type="primary"):
+                        supabase.table("prizes").delete().eq("id", selected_prize['id']).execute()
+                        st.success(f"Prize '{selected_prize['name']}' deleted!")
+                        st.rerun()
+        else:
+            st.info("No prizes available to manage for this event.")
+            
     else:
-        st.warning("Please create an active event above before adding prizes.")
+        st.warning("Please create an active event above before managing prizes.")
 
 # -----------------------------------------
 # TAB 1: LIVE ANALYTICS
@@ -90,14 +137,12 @@ with tab_setup:
 with tab_analytics:
     st.header("Live Event Analytics")
 
-    # Fetch active event
     event_response = supabase.table("events").select("*").eq("is_active", True).execute()
 
     if event_response.data:
         current_event = event_response.data[0]
         st.subheader(f"Active Event: {current_event['name']}")
         
-        # Display prize inventory
         st.markdown("### Current Prize Inventory")
         prizes = supabase.table("prizes").select("*").eq("event_id", current_event['id']).execute()
         
@@ -110,7 +155,6 @@ with tab_analytics:
         else:
             st.info("No prizes added yet. Go to the Setup tab to add inventory.")
         
-        # Display PSR Winners List
         st.markdown("### PSR Winners List")
         spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, prizes(name)").eq("event_id", current_event['id']).execute()
         
