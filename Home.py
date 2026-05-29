@@ -10,18 +10,15 @@ st.set_page_config(page_title="Unity Spin to Win", page_icon="🎸", layout="cen
 
 st.markdown("""
 <style>
-    /* Hide standard Streamlit top-right menu and footer, but KEEP the header so you can open the sidebar */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
-    /* Reduce top padding for mobile screens so the logo is at the top */
     .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
         max-width: 500px; 
     }
     
-    /* Make buttons huge and thumb-friendly */
     div[data-testid="stButton"] > button {
         height: 65px;
         font-size: 20px;
@@ -57,7 +54,6 @@ def render_wheel(prize_names, winning_index):
         
     actual_winning_index = prize_names.index(prize_names[winning_index]) if winning_index < len(prize_names) else winning_index
 
-    # Added viewport meta tag to prevent pinch-to-zoom on mobile
     html_code = f"""
     <!DOCTYPE html>
     <html>
@@ -83,7 +79,6 @@ def render_wheel(prize_names, winning_index):
             const sliceAngle = (2 * Math.PI) / numSlices;
             const colors = ["#ffffff", "#f0f0f0", "#e0e0e0", "#d0d0d0", "#c0c0c0", "#b0b0b0"];
             
-            // Draw Wheel
             for (let i = 0; i < numSlices; i++) {{
                 ctx.beginPath();
                 ctx.moveTo(140, 140);
@@ -92,7 +87,6 @@ def render_wheel(prize_names, winning_index):
                 ctx.fill();
                 ctx.stroke();
                 
-                // Add Text
                 ctx.save();
                 ctx.translate(140, 140);
                 ctx.rotate(i * sliceAngle + sliceAngle / 2);
@@ -132,18 +126,49 @@ if not event_response.data:
 
 current_event = event_response.data[0]
 
-# Block the wheel if the event is paused
 if current_event['status'] == 'Paused':
     st.warning("⏸️ The prize wheel is temporarily paused for restocking. Please check back in a few minutes!")
     st.stop()
 
 # Initialize session states
+if "authorized_email" not in st.session_state:
+    st.session_state.authorized_email = None
 if "won_prize" not in st.session_state:
     st.session_state.won_prize = None
 if "prize_id" not in st.session_state:
     st.session_state.prize_id = None
 if "spinning" not in st.session_state:
     st.session_state.spinning = False
+
+# --- NEW: THE GATEKEEPER ---
+if not st.session_state.authorized_email:
+    st.markdown("### Welcome! Verify Your Eligibility")
+    st.write("Guests are limited to one prize spin per lifetime across all Hard Rock promotional events. Enter your email to begin.")
+    
+    with st.form("eligibility_form"):
+        email_input = st.text_input("Email Address", type="default").strip().lower()
+        submit_check = st.form_submit_button("Check Eligibility")
+        
+        if submit_check:
+            if email_input:
+                # Query the entire database to see if this email has ever played
+                history_check = supabase.table("spins").select("id").eq("email", email_input).execute()
+                
+                if history_check.data:
+                    st.error("🚨 It looks like you've already participated in a Spin to Win event! We'll see you on the casino floor.")
+                else:
+                    # They are clean, authorize them and refresh
+                    st.session_state.authorized_email = email_input
+                    st.rerun()
+            else:
+                st.error("Please enter a valid email address.")
+    
+    # Stop the app from loading the wheel until they pass the gatekeeper
+    st.stop()
+
+# -----------------------------------------------------
+# EVERYTHING BELOW ONLY LOADS IF THEY PASSED THE GATE
+# -----------------------------------------------------
 
 # 2. Fetch available prizes
 prizes_response = supabase.table("prizes").select("*").eq("event_id", current_event['id']).gt("remaining_quantity", 0).execute()
@@ -189,26 +214,26 @@ elif st.session_state.spinning and "claimed" not in st.session_state:
     st.session_state.spinning = False
     st.rerun()
 
-# 4. Form Submission
+# 4. Form Submission (Updated to remove email, since we already have it)
 if st.session_state.won_prize and not st.session_state.spinning and "claimed" not in st.session_state:
     st.success(f"🎉 You won: **{st.session_state.won_prize}**!")
-    st.write("Enter your details below to reveal your claim pass.")
+    st.write("Enter your name below to reveal your claim pass.")
     
     with st.form("claim_form"):
         first_name = st.text_input("First Name")
         last_name = st.text_input("Last Name")
-        email = st.text_input("Email", type="default") # Explicitly set to string input for mobile keyboards
         submit = st.form_submit_button("Reveal Claim Pass")
         
         if submit:
-            if first_name and last_name and email:
+            if first_name and last_name:
                 unique_code = "HR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
                 
+                # Insert the spin using the authorized email from step 1
                 supabase.table("spins").insert({
                     "event_id": current_event['id'],
                     "first_name": first_name,
                     "last_name": last_name,
-                    "email": email,
+                    "email": st.session_state.authorized_email, 
                     "prize_id": st.session_state.prize_id,
                     "claim_code": unique_code
                 }).execute()
@@ -219,7 +244,7 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
                 st.session_state.claim_code = unique_code
                 st.rerun()
             else:
-                st.error("Please fill out all fields to secure your prize.")
+                st.error("Please enter your name to secure your prize.")
 
 # 5. Final Screenshot Screen
 if "claimed" in st.session_state:
