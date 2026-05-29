@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 from supabase import create_client
 import random
 import time
+import string
 
 # Connect to database
 @st.cache_resource
@@ -82,7 +83,11 @@ def render_wheel(prize_names, winning_index):
     """
     components.html(html_code, height=350)
 
-st.title("Unity by Hard Rock: Spin to Win")
+# Add Logo (Requires logo.png in the GitHub repository)
+try:
+    st.image("logo.png", width=250)
+except:
+    st.title("Unity by Hard Rock: Spin to Win")
 
 # 1. Fetch active or paused event
 event_response = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
@@ -93,6 +98,7 @@ if not event_response.data:
 
 current_event = event_response.data[0]
 
+# Block the wheel if the event is paused
 if current_event['status'] == 'Paused':
     st.warning("⏸️ The prize wheel is temporarily paused for restocking. Please check back in a few minutes!")
     st.stop()
@@ -167,18 +173,23 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
         
         if submit:
             if first_name and last_name and email:
-                # Log the winner for the PSRs
+                # Generate a unique 6-character claim code prefixed with HR-
+                unique_code = "HR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+                
+                # Log the winner AND the claim code for the PSRs
                 supabase.table("spins").insert({
                     "event_id": current_event['id'],
                     "first_name": first_name,
                     "last_name": last_name,
                     "email": email,
-                    "prize_id": st.session_state.prize_id
+                    "prize_id": st.session_state.prize_id,
+                    "claim_code": unique_code
                 }).execute()
                 
                 st.session_state.claimed = True
                 st.session_state.first_name = first_name
                 st.session_state.last_name = last_name
+                st.session_state.claim_code = unique_code
                 st.rerun()
             else:
                 st.error("Please fill out all fields to secure your prize.")
@@ -187,10 +198,16 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
 if "claimed" in st.session_state:
     st.warning("🚨 **TAKE A SCREENSHOT OF THIS PAGE NOW** 🚨")
     
+    fname = st.session_state.get('first_name', 'Guest')
+    lname = st.session_state.get('last_name', '')
+    won_prize = st.session_state.get('won_prize', 'Unknown Prize')
+    claim_code = st.session_state.get('claim_code', 'ERROR-NO-CODE')
+    
     st.markdown(f"""
     ### Your Claim Pass
-    * **Name:** {st.session_state.first_name} {st.session_state.last_name}
-    * **Prize Won:** {st.session_state.won_prize}
+    * **Claim Code:** `{claim_code}`
+    * **Name:** {fname} {lname}
+    * **Prize Won:** {won_prize}
     * **Event:** {current_event['name']}
     """)
     
