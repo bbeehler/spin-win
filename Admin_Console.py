@@ -62,7 +62,6 @@ if choice == "✅ Verify & Redeem":
     verify_code = st.text_input("Enter Claim Code (e.g., HR-XXXXXX)").strip().upper()
     
     if verify_code:
-        # Pull the spin, the prize name, AND the event dates in one query
         spin_record = supabase.table("spins").select("*, prizes(name), events(name, redeem_start, redeem_expiry)").eq("claim_code", verify_code).execute()
         
         if spin_record.data:
@@ -79,7 +78,6 @@ if choice == "✅ Verify & Redeem":
                 
             st.divider()
             
-            # --- REDEMPTION DATE LOGIC ---
             today = datetime.date.today()
             start_date = None
             expiry_date = None
@@ -92,10 +90,8 @@ if choice == "✅ Verify & Redeem":
                 st.error("🚨 FRAUD ALERT: THIS CODE HAS ALREADY BEEN REDEEMED. 🚨")
             elif start_date and today < start_date:
                 st.error(f"⚠️ TOO EARLY: This prize cannot be redeemed until **{start_date.strftime('%B %d, %Y')}**.")
-                st.write("Please inform the guest to return during the active redemption window.")
             elif expiry_date and today > expiry_date:
                 st.error(f"🚨 EXPIRED: This prize expired on **{expiry_date.strftime('%B %d, %Y')}**.")
-                st.write("This claim code is no longer valid.")
             else:
                 st.success("✅ Code is valid, unredeemed, and within the active window.")
                 st.warning(f"Please verify the guest's physical ID matches the name: **{record['first_name']} {record['last_name']}**")
@@ -113,8 +109,11 @@ elif choice == "📋 Winners List":
     st.header("Daily Winners List")
     active_events = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
     if active_events.data:
-        current_event = active_events.data[0]
-        st.subheader(f"Event: {current_event['name']}")
+        # Give PSRs a dropdown if there are multiple active events
+        event_dict = {e['name']: e for e in active_events.data}
+        selected_event_name = st.selectbox("Select Event", options=list(event_dict.keys()))
+        current_event = event_dict[selected_event_name]
+        
         spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, claim_code, is_redeemed, prizes(name)").eq("event_id", current_event['id']).execute()
         if spins.data:
             winners = [{"Code": s.get("claim_code"), "Status": "Redeemed" if s.get("is_redeemed") else "Pending", "First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown"} for s in spins.data]
@@ -137,6 +136,16 @@ elif choice == "📊 Event Analytics":
         selected_event_name = st.selectbox("Select an Event to View:", options=list(event_dict.keys()), index=default_index)
         selected_event = event_dict[selected_event_name]
         
+        # --- NEW: DISPLAY EXPECTED ATTENDANCE ---
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            status = selected_event.get('status', 'Completed')
+            if status == 'Active': st.success(f"🟢 ACTIVE")
+            elif status == 'Paused': st.warning(f"⏸️ PAUSED")
+            else: st.info(f"⚪ COMPLETED")
+        with col2:
+            st.info(f"👥 Expected Attendance: **{selected_event.get('expected_attendance', 0):,}**")
+            
         st.divider()
         st.markdown("### Prize Inventory & Odds Tracker")
         prizes = supabase.table("prizes").select("*").eq("event_id", selected_event['id']).execute()
@@ -152,7 +161,6 @@ elif choice == "📊 Event Analytics":
                 columns={'name': 'Prize', 'value': 'Value ($)', 'total_quantity': 'Total', 'remaining_quantity': 'Remaining', 'win_probability_percent': 'Odds (%)'}
             )
             
-            # --- CALCULATE AND APPEND TOTALS ROW ---
             totals_row = pd.DataFrame([{
                 'Prize': 'TOTALS',
                 'Value ($)': display_prizes['Value ($)'].sum(),
@@ -162,7 +170,6 @@ elif choice == "📊 Event Analytics":
             }])
             
             display_prizes = pd.concat([display_prizes, totals_row], ignore_index=True)
-            
             st.dataframe(display_prizes, hide_index=True, use_container_width=True)
         else:
             st.info("No prizes associated with this event.")
@@ -173,6 +180,12 @@ elif choice == "📊 Event Analytics":
             winners = [{"Code": s.get("claim_code"), "First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", "Time": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""} for s in spins.data]
             winners_df = pd.DataFrame(winners)
             st.dataframe(winners_df, hide_index=True, use_container_width=True)
+            
+            # Conversion Metric
+            if selected_event.get('expected_attendance', 0) > 0:
+                conversion = (len(winners) / selected_event['expected_attendance']) * 100
+                st.write(f"📈 **Conversion Rate:** {conversion:.1f}% of expected attendees have spun the wheel.")
+                
             st.download_button(label="Download CSV", data=winners_df.to_csv(index=False).encode('utf-8'), file_name="winners.csv", mime="text/csv")
 
 # -----------------------------------------
@@ -183,8 +196,8 @@ elif choice == "⚙️ Setup & Inventory":
     st.header("1. Create a New Promotion Event")
     with st.form("new_event_form"):
         event_name = st.text_input("Event Name (e.g., Summer Concert Promo)")
+        expected_att = st.number_input("Expected Attendance", min_value=0, value=500, help="Estimated number of guests for this activation.")
         
-        # New Date Pickers
         col_start, col_end = st.columns(2)
         with col_start:
             start_date = st.date_input("Redemption Start Date", datetime.date.today())
@@ -193,12 +206,13 @@ elif choice == "⚙️ Setup & Inventory":
             
         submit_event = st.form_submit_button("Create & Activate Event")
         if submit_event and event_name:
-            supabase.table("events").update({"status": "Completed"}).eq("status", "Active").execute()
+            # We don't pause other events automatically anymore, since you can run multiples
             supabase.table("events").insert({
                 "name": event_name, 
                 "status": "Active",
                 "redeem_start": str(start_date),
-                "redeem_expiry": str(expiry_date)
+                "redeem_expiry": str(expiry_date),
+                "expected_attendance": expected_att
             }).execute()
             st.success(f"Event '{event_name}' created and activated!")
             st.rerun() 
@@ -221,8 +235,6 @@ elif choice == "⚙️ Setup & Inventory":
                 new_status = st.radio("Set Status:", options=["Active", "Paused", "Completed"], index=["Active", "Paused", "Completed"].index(current_status))
                 
             if st.button("Update Event Status", type="primary"):
-                if new_status == "Active":
-                    supabase.table("events").update({"status": "Paused"}).eq("status", "Active").execute()
                 supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
                 st.success(f"'{selected_manage_name}' is now {new_status}!")
                 st.rerun()
@@ -232,10 +244,12 @@ elif choice == "⚙️ Setup & Inventory":
     st.divider()
 
     st.header("3. Add & Manage Prizes")
-    active_events = supabase.table("events").select("*").eq("status", "Active").execute()
+    active_events = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
     if active_events.data:
-        current_event = active_events.data[0]
-        st.info(f"Adding inventory to: **{current_event['name']}**")
+        event_dict = {e['name']: e for e in active_events.data}
+        selected_prize_event = st.selectbox("Select Event to Manage Inventory:", options=list(event_dict.keys()))
+        current_event = event_dict[selected_prize_event]
+        
         with st.form("new_prize_form"):
             col1, col2 = st.columns(2)
             col3, col4 = st.columns(2)
