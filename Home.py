@@ -291,9 +291,5 @@ if "claimed" in st.session_state:
     * **Valid For Redemption:** {validity_text}
     """)
     
-    st.success("Show this screenshot to a representative at the Unity Players Club during the valid redemption dates to claim your prize. See you on the floor!")
-    
-    st.write("")
-    if st.button("🔄 Admin: Reset for Next Test", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
+    st.success("Show this screenshot to a representative at the Unity Players Club during the valid redemption dates to claim your prize. See you soon!")
+
