@@ -164,8 +164,8 @@ if current_event['status'] == 'Paused':
 
 # --- STEP 2: THE GATEKEEPER ---
 if not st.session_state.authorized_email:
-    st.markdown(f"### Welcome to **{current_event['name']}**!")
-    st.write("Guests are limited to one prize spin per lifetime across all Hard Rock promotional events. Enter your email to begin.")
+    st.markdown(f"### {current_event['name']}")
+    st.write("You are are limited to one prize spin per lifetime across all Hard Rock Hotel & Casino Ottawa promotional events. Enter your email to begin.")
     
     with st.form("eligibility_form"):
         email_input = st.text_input("Email Address", type="default").strip().lower()
