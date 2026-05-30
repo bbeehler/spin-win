@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
+import datetime
 
 @st.cache_resource
 def init_connection():
@@ -59,8 +60,11 @@ choice = st.sidebar.radio("Navigation", nav_options)
 if choice == "✅ Verify & Redeem":
     st.header("PSR Verification Kiosk")
     verify_code = st.text_input("Enter Claim Code (e.g., HR-XXXXXX)").strip().upper()
+    
     if verify_code:
-        spin_record = supabase.table("spins").select("*, prizes(name)").eq("claim_code", verify_code).execute()
+        # Pull the spin, the prize name, AND the event dates in one query
+        spin_record = supabase.table("spins").select("*, prizes(name), events(name, redeem_start, redeem_expiry)").eq("claim_code", verify_code).execute()
+        
         if spin_record.data:
             record = spin_record.data[0]
             st.markdown("### Database Match Found")
@@ -68,14 +72,32 @@ if choice == "✅ Verify & Redeem":
             with col1:
                 st.write(f"**Name:** {record['first_name']} {record['last_name']}")
                 st.write(f"**Email:** {record['email']}")
+                st.write(f"**Event:** {record['events']['name'] if record.get('events') else 'Unknown'}")
             with col2:
                 st.write(f"**Prize:** {record['prizes']['name'] if record['prizes'] else 'Unknown'}")
                 st.write(f"**Claim Code:** `{record['claim_code']}`")
+                
             st.divider()
+            
+            # --- REDEMPTION DATE LOGIC ---
+            today = datetime.date.today()
+            start_date = None
+            expiry_date = None
+            
+            if record.get('events') and record['events'].get('redeem_start') and record['events'].get('redeem_expiry'):
+                start_date = datetime.datetime.strptime(record['events']['redeem_start'], "%Y-%m-%d").date()
+                expiry_date = datetime.datetime.strptime(record['events']['redeem_expiry'], "%Y-%m-%d").date()
+
             if record.get('is_redeemed'):
                 st.error("🚨 FRAUD ALERT: THIS CODE HAS ALREADY BEEN REDEEMED. 🚨")
+            elif start_date and today < start_date:
+                st.error(f"⚠️ TOO EARLY: This prize cannot be redeemed until **{start_date.strftime('%B %d, %Y')}**.")
+                st.write("Please inform the guest to return during the active redemption window.")
+            elif expiry_date and today > expiry_date:
+                st.error(f"🚨 EXPIRED: This prize expired on **{expiry_date.strftime('%B %d, %Y')}**.")
+                st.write("This claim code is no longer valid.")
             else:
-                st.success("✅ Code is valid and unredeemed.")
+                st.success("✅ Code is valid, unredeemed, and within the active window.")
                 st.warning(f"Please verify the guest's physical ID matches the name: **{record['first_name']} {record['last_name']}**")
                 if st.button("Mark as Redeemed & Issue Prize", type="primary"):
                     supabase.table("spins").update({"is_redeemed": True}).eq("id", record['id']).execute()
@@ -120,8 +142,6 @@ elif choice == "📊 Event Analytics":
         prizes = supabase.table("prizes").select("*").eq("event_id", selected_event['id']).execute()
         if prizes.data:
             prize_df = pd.DataFrame(prizes.data)
-            
-            # Math Check
             total_odds = prize_df['win_probability_percent'].sum()
             if total_odds == 100:
                 st.success(f"✅ The math is balanced. Total probabilities equal {total_odds}%")
@@ -148,21 +168,31 @@ elif choice == "📊 Event Analytics":
 # -----------------------------------------
 elif choice == "⚙️ Setup & Inventory":
     
-    # --- 1. Create Event ---
     st.header("1. Create a New Promotion Event")
     with st.form("new_event_form"):
         event_name = st.text_input("Event Name (e.g., Summer Concert Promo)")
+        
+        # New Date Pickers
+        col_start, col_end = st.columns(2)
+        with col_start:
+            start_date = st.date_input("Redemption Start Date", datetime.date.today())
+        with col_end:
+            expiry_date = st.date_input("Redemption Expiry Date", datetime.date.today() + datetime.timedelta(days=30))
+            
         submit_event = st.form_submit_button("Create & Activate Event")
         if submit_event and event_name:
-            # Set other active events to Completed
             supabase.table("events").update({"status": "Completed"}).eq("status", "Active").execute()
-            supabase.table("events").insert({"name": event_name, "status": "Active"}).execute()
+            supabase.table("events").insert({
+                "name": event_name, 
+                "status": "Active",
+                "redeem_start": str(start_date),
+                "redeem_expiry": str(expiry_date)
+            }).execute()
             st.success(f"Event '{event_name}' created and activated!")
             st.rerun() 
 
     st.divider()
     
-    # --- 2. Manage Event Status ---
     st.header("2. Manage Event Status")
     all_events_manage = supabase.table("events").select("*").execute()
     if all_events_manage.data:
@@ -179,7 +209,6 @@ elif choice == "⚙️ Setup & Inventory":
                 new_status = st.radio("Set Status:", options=["Active", "Paused", "Completed"], index=["Active", "Paused", "Completed"].index(current_status))
                 
             if st.button("Update Event Status", type="primary"):
-                # If setting to active, pause any currently active event
                 if new_status == "Active":
                     supabase.table("events").update({"status": "Paused"}).eq("status", "Active").execute()
                 supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
@@ -190,8 +219,7 @@ elif choice == "⚙️ Setup & Inventory":
 
     st.divider()
 
-    # --- 3. Add & Manage Prizes ---
-    st.header("3. Add Prizes to Active Event")
+    st.header("3. Add & Manage Prizes")
     active_events = supabase.table("events").select("*").eq("status", "Active").execute()
     if active_events.data:
         current_event = active_events.data[0]
@@ -202,7 +230,7 @@ elif choice == "⚙️ Setup & Inventory":
             with col1: prize_name = st.text_input("Prize Name")
             with col2: prize_value = st.number_input("Value ($)", min_value=0.0, value=15.0)
             with col3: prize_qty = st.number_input("Total Quantity", min_value=1, value=50)
-            with col4: prize_odds = st.number_input("Win Probability (%)", min_value=0.0, max_value=100.0, value=10.0, help="Example: 2.5 for a 2.5% chance")
+            with col4: prize_odds = st.number_input("Win Probability (%)", min_value=0.0, max_value=100.0, value=10.0)
             
             if st.form_submit_button("Add Prize"):
                 supabase.table("prizes").insert({
@@ -240,7 +268,7 @@ elif choice == "⚙️ Setup & Inventory":
                         supabase.table("prizes").delete().eq("id", selected_prize['id']).execute()
                         st.rerun()
     else:
-        st.warning("⚠️ There are no Active events right now. Please create a new event above, or set an existing one to 'Active' to add and manage prizes.")
+        st.warning("⚠️ There are no Active events right now.")
 
 # -----------------------------------------
 # VIEW: MANAGE STAFF
@@ -265,8 +293,6 @@ elif choice == "🔐 Manage Staff":
             col1, col2, col3 = st.columns([2, 2, 1])
             col1.write(f"👤 **{u['username']}**")
             col2.write(f"*{u['role']}*")
-            
-            # Prevent Super Admin from deleting themselves accidentally
             if u['role'] != 'Super Admin':
                 if col3.button("Remove Access", key=f"del_{u['id']}", type="secondary"):
                     supabase.table("admin_users").delete().eq("id", u['id']).execute()
