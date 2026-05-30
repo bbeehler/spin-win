@@ -11,6 +11,9 @@ def init_connection():
 supabase = init_connection()
 st.set_page_config(page_title="Admin Console", layout="wide")
 
+# -----------------------------------------
+# LOGIN SYSTEM
+# -----------------------------------------
 if "admin_role" not in st.session_state:
     st.title("Unity Promotion Console")
     st.write("Please log in to access your dashboard.")
@@ -29,6 +32,9 @@ if "admin_role" not in st.session_state:
                 st.error("Invalid username or password.")
     st.stop()
 
+# -----------------------------------------
+# SIDEBAR NAVIGATION
+# -----------------------------------------
 role = st.session_state.admin_role
 st.sidebar.success(f"Logged in as: **{st.session_state.admin_username}** ({role})")
 if st.sidebar.button("Log Out"):
@@ -115,7 +121,7 @@ elif choice == "📊 Event Analytics":
         if prizes.data:
             prize_df = pd.DataFrame(prizes.data)
             
-            # Math Check for the Manager
+            # Math Check
             total_odds = prize_df['win_probability_percent'].sum()
             if total_odds == 100:
                 st.success(f"✅ The math is balanced. Total probabilities equal {total_odds}%")
@@ -141,7 +147,51 @@ elif choice == "📊 Event Analytics":
 # VIEW: SETUP & INVENTORY 
 # -----------------------------------------
 elif choice == "⚙️ Setup & Inventory":
-    st.header("1. Add Prizes to Active Event")
+    
+    # --- 1. Create Event ---
+    st.header("1. Create a New Promotion Event")
+    with st.form("new_event_form"):
+        event_name = st.text_input("Event Name (e.g., Summer Concert Promo)")
+        submit_event = st.form_submit_button("Create & Activate Event")
+        if submit_event and event_name:
+            # Set other active events to Completed
+            supabase.table("events").update({"status": "Completed"}).eq("status", "Active").execute()
+            supabase.table("events").insert({"name": event_name, "status": "Active"}).execute()
+            st.success(f"Event '{event_name}' created and activated!")
+            st.rerun() 
+
+    st.divider()
+    
+    # --- 2. Manage Event Status ---
+    st.header("2. Manage Event Status")
+    all_events_manage = supabase.table("events").select("*").execute()
+    if all_events_manage.data:
+        event_dict_manage = {e['name']: e for e in all_events_manage.data}
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            selected_manage_name = st.selectbox("Select an Event to Update:", options=["-- Select an Event --"] + list(event_dict_manage.keys()))
+        
+        if selected_manage_name != "-- Select an Event --":
+            selected_event_manage = event_dict_manage[selected_manage_name]
+            current_status = selected_event_manage.get('status', 'Completed')
+            
+            with col2:
+                new_status = st.radio("Set Status:", options=["Active", "Paused", "Completed"], index=["Active", "Paused", "Completed"].index(current_status))
+                
+            if st.button("Update Event Status", type="primary"):
+                # If setting to active, pause any currently active event
+                if new_status == "Active":
+                    supabase.table("events").update({"status": "Paused"}).eq("status", "Active").execute()
+                supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
+                st.success(f"'{selected_manage_name}' is now {new_status}!")
+                st.rerun()
+    else:
+        st.info("No events found.")
+
+    st.divider()
+
+    # --- 3. Add & Manage Prizes ---
+    st.header("3. Add Prizes to Active Event")
     active_events = supabase.table("events").select("*").eq("status", "Active").execute()
     if active_events.data:
         current_event = active_events.data[0]
@@ -163,7 +213,7 @@ elif choice == "⚙️ Setup & Inventory":
                 st.rerun()
                 
         st.divider()
-        st.header("2. Manage Existing Prizes")
+        st.subheader("Manage Existing Prizes")
         current_prizes = supabase.table("prizes").select("*").eq("event_id", current_event['id']).execute()
         if current_prizes.data:
             prize_dict = {p['name']: p for p in current_prizes.data}
@@ -189,6 +239,8 @@ elif choice == "⚙️ Setup & Inventory":
                     if st.button("🚨 Delete Prize", type="primary"):
                         supabase.table("prizes").delete().eq("id", selected_prize['id']).execute()
                         st.rerun()
+    else:
+        st.warning("⚠️ There are no Active events right now. Please create a new event above, or set an existing one to 'Active' to add and manage prizes.")
 
 # -----------------------------------------
 # VIEW: MANAGE STAFF
@@ -203,3 +255,21 @@ elif choice == "🔐 Manage Staff":
         if st.form_submit_button("Create Account"):
             supabase.table("admin_users").insert({"username": new_user, "password": new_pass, "role": new_role}).execute()
             st.rerun()
+            
+    st.divider()
+    st.subheader("Current Staff Accounts")
+    
+    users_req = supabase.table("admin_users").select("*").order("role").execute()
+    if users_req.data:
+        for u in users_req.data:
+            col1, col2, col3 = st.columns([2, 2, 1])
+            col1.write(f"👤 **{u['username']}**")
+            col2.write(f"*{u['role']}*")
+            
+            # Prevent Super Admin from deleting themselves accidentally
+            if u['role'] != 'Super Admin':
+                if col3.button("Remove Access", key=f"del_{u['id']}", type="secondary"):
+                    supabase.table("admin_users").delete().eq("id", u['id']).execute()
+                    st.rerun()
+            else:
+                col3.write("*(Master Account)*")
