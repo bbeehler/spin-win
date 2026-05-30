@@ -255,20 +255,20 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
 # --- STEP 5: FINAL SCREENSHOT ---
 if "claimed" in st.session_state:
     
-    # --- MASSIVE RED WARNING BANNER ---
+    # --- MASSIVE RED WARNING BANNER (ICONS REMOVED) ---
     st.markdown("""
-    <div style="background-color: #ff4b4b; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #8b0000; margin-bottom: 20px;">
-        <h2 style="color: white; margin-top: 0; margin-bottom: 10px;">🚨 STOP & SCREENSHOT 🚨</h2>
+    <div style="background-color: #ff4b4b; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #8b0000; margin-bottom: 10px;">
+        <h2 style="color: white; margin-top: 0; margin-bottom: 10px;">STOP & SCREENSHOT</h2>
         <p style="color: white; font-size: 16px; margin-bottom: 0;"><strong>You MUST take a screenshot of this page RIGHT NOW.</strong> <br>If you close this screen, your pass will be lost.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # --- DEVICE INSTRUCTIONS ---
-    st.info("""
-    **📱 How to take a screenshot:**
-    * **🍎 iPhone:** Press the **Side Button** + **Volume Up** together.
-    * **🤖 Android:** Press the **Power Button** + **Volume Down** together.
-    """)
+    # --- DEVICE INSTRUCTIONS (HIDDEN BEHIND ICON) ---
+    with st.expander("ℹ️ How to take a screenshot"):
+        st.markdown("""
+        * **iPhone:** Press the **Side Button** + **Volume Up** together.
+        * **Android:** Press the **Power Button** + **Volume Down** together.
+        """)
     
     fname = st.session_state.get('first_name', 'Guest')
     lname = st.session_state.get('last_name', '')
