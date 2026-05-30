@@ -151,6 +151,18 @@ elif choice == "📊 Event Analytics":
             display_prizes = prize_df[['name', 'value', 'total_quantity', 'remaining_quantity', 'win_probability_percent']].rename(
                 columns={'name': 'Prize', 'value': 'Value ($)', 'total_quantity': 'Total', 'remaining_quantity': 'Remaining', 'win_probability_percent': 'Odds (%)'}
             )
+            
+            # --- CALCULATE AND APPEND TOTALS ROW ---
+            totals_row = pd.DataFrame([{
+                'Prize': 'TOTALS',
+                'Value ($)': display_prizes['Value ($)'].sum(),
+                'Total': display_prizes['Total'].sum(),
+                'Remaining': display_prizes['Remaining'].sum(),
+                'Odds (%)': display_prizes['Odds (%)'].sum()
+            }])
+            
+            display_prizes = pd.concat([display_prizes, totals_row], ignore_index=True)
+            
             st.dataframe(display_prizes, hide_index=True, use_container_width=True)
         else:
             st.info("No prizes associated with this event.")
