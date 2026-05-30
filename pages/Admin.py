@@ -11,34 +11,65 @@ def init_connection():
 
 supabase = init_connection()
 
-st.title("Promotion Admin Console")
+st.set_page_config(page_title="Admin Console", layout="wide")
 
-# Secure Login
-with st.sidebar.form("login_form"):
-    st.header("Admin Login")
-    admin_pass = st.text_input("Password", type="password")
-    submit_login = st.form_submit_button("Log In")
-
-expected_pass = st.secrets.get("ADMIN_PASSWORD", "HardRock2026")
-
-if admin_pass != expected_pass:
-    st.warning("Please enter the admin password in the sidebar and click 'Log In' to view this page.")
+# -----------------------------------------
+# LOGIN SYSTEM
+# -----------------------------------------
+if "admin_role" not in st.session_state:
+    st.title("Unity Promotion Console")
+    st.write("Please log in to access your dashboard.")
+    
+    with st.form("login_form"):
+        username = st.text_input("Username").strip()
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Log In", type="primary")
+        
+        if submit:
+            user_check = supabase.table("admin_users").select("*").eq("username", username).eq("password", password).execute()
+            
+            if user_check.data:
+                user = user_check.data[0]
+                st.session_state.admin_role = user['role']
+                st.session_state.admin_username = user['username']
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
     st.stop()
 
-# Reordered tabs to put Verification first for the desk staff
-tab_verify, tab_analytics, tab_setup = st.tabs(["✅ Verify Winner", "📊 Event Analytics", "⚙️ Setup & Inventory"])
+# -----------------------------------------
+# SIDEBAR NAVIGATION
+# -----------------------------------------
+role = st.session_state.admin_role
+
+st.sidebar.success(f"Logged in as: **{st.session_state.admin_username}** ({role})")
+if st.sidebar.button("Log Out"):
+    st.session_state.clear()
+    st.rerun()
+
+st.sidebar.divider()
+
+# Define navigation based on role
+nav_options = []
+if role == 'PSR':
+    nav_options = ["✅ Verify & Redeem", "📋 Winners List"]
+elif role == 'Manager':
+    nav_options = ["✅ Verify & Redeem", "📊 Event Analytics", "⚙️ Setup & Inventory"]
+elif role == 'Super Admin':
+    nav_options = ["✅ Verify & Redeem", "📊 Event Analytics", "⚙️ Setup & Inventory", "🔐 Manage Staff"]
+
+choice = st.sidebar.radio("Navigation", nav_options)
 
 # -----------------------------------------
-# TAB 1: VERIFY WINNER (PSR KIOSK)
+# VIEW: VERIFY & REDEEM (All Roles)
 # -----------------------------------------
-with tab_verify:
+if choice == "✅ Verify & Redeem":
     st.header("PSR Verification Kiosk")
     st.write("Enter the claim code from the guest's screenshot to verify their identity and redeem the prize.")
     
     verify_code = st.text_input("Enter Claim Code (e.g., HR-XXXXXX)").strip().upper()
     
     if verify_code:
-        # Look up the code in the spins table
         spin_record = supabase.table("spins").select("*, prizes(name)").eq("claim_code", verify_code).execute()
         
         if spin_record.data:
@@ -55,7 +86,6 @@ with tab_verify:
                 
             st.divider()
             
-            # Check if it was already used
             if record.get('is_redeemed'):
                 st.error("🚨 FRAUD ALERT: THIS CODE HAS ALREADY BEEN REDEEMED. 🚨")
                 st.write("Do not issue a prize. This screenshot has already been used.")
@@ -63,7 +93,6 @@ with tab_verify:
                 st.success("✅ Code is valid and unredeemed.")
                 st.warning(f"Please verify the guest's physical ID matches the name: **{record['first_name']} {record['last_name']}**")
                 
-                # Burn the code button
                 if st.button("Mark as Redeemed & Issue Prize", type="primary"):
                     supabase.table("spins").update({"is_redeemed": True}).eq("id", record['id']).execute()
                     st.success("Prize successfully marked as redeemed! The code is now burned.")
@@ -72,9 +101,39 @@ with tab_verify:
             st.error("❌ Invalid Claim Code. No match found in the database. Do not issue prize.")
 
 # -----------------------------------------
-# TAB 2: EVENT ANALYTICS
+# VIEW: PSR WINNERS LIST (PSR Only)
 # -----------------------------------------
-with tab_analytics:
+elif choice == "📋 Winners List":
+    st.header("Daily Winners List")
+    st.write("Download the verified list of winners for your desk.")
+    
+    active_events = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
+    if active_events.data:
+        current_event = active_events.data[0]
+        st.subheader(f"Event: {current_event['name']}")
+        
+        spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, claim_code, is_redeemed, prizes(name)").eq("event_id", current_event['id']).execute()
+        
+        if spins.data:
+            winners = [{"Code": s.get("claim_code"), "Status": "Redeemed" if s.get("is_redeemed") else "Pending", "First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown"} for s in spins.data]
+            winners_df = pd.DataFrame(winners)
+            st.dataframe(winners_df, hide_index=True, use_container_width=True)
+            
+            st.download_button(
+                label="Download Winners (CSV)",
+                data=winners_df.to_csv(index=False).encode('utf-8'),
+                file_name=f"psr_winners.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No winners recorded yet.")
+    else:
+        st.info("No active events currently running.")
+
+# -----------------------------------------
+# VIEW: EVENT ANALYTICS (Manager & Super Admin)
+# -----------------------------------------
+elif choice == "📊 Event Analytics":
     st.header("Event Analytics")
 
     all_events_response = supabase.table("events").select("*").order("name").execute()
@@ -109,23 +168,11 @@ with tab_analytics:
         else:
             st.info("No prizes associated with this event.")
         
-        st.markdown("### PSR Winners List")
-        # Included is_redeemed in the data pull
+        st.markdown("### Full Winners List")
         spins = supabase.table("spins").select("first_name, last_name, email, claimed_at, claim_code, is_redeemed, prizes(name)").eq("event_id", selected_event['id']).execute()
         
         if spins.data:
-            winners = []
-            for s in spins.data:
-                winners.append({
-                    "Code": s.get("claim_code"),
-                    "Status": "Redeemed" if s.get("is_redeemed") else "Pending",
-                    "First Name": s.get("first_name"), 
-                    "Last Name": s.get("last_name"), 
-                    "Email": s.get("email"), 
-                    "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", 
-                    "Time Claimed": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""
-                })
-                
+            winners = [{"Code": s.get("claim_code"), "Status": "Redeemed" if s.get("is_redeemed") else "Pending", "First Name": s.get("first_name"), "Last Name": s.get("last_name"), "Email": s.get("email"), "Prize Won": s["prizes"]["name"] if s.get("prizes") else "Unknown", "Time": pd.to_datetime(s.get("claimed_at")).strftime("%Y-%m-%d %I:%M %p") if s.get("claimed_at") else ""} for s in spins.data]
             winners_df = pd.DataFrame(winners)
             st.dataframe(winners_df, hide_index=True, use_container_width=True)
             
@@ -138,12 +185,12 @@ with tab_analytics:
         else:
             st.info("No winners recorded for this event yet.")
     else:
-        st.error("No events found in the database. Go to the Setup tab to create one.")
+        st.error("No events found in the database.")
 
 # -----------------------------------------
-# TAB 3: SETUP & INVENTORY
+# VIEW: SETUP & INVENTORY (Manager & Super Admin)
 # -----------------------------------------
-with tab_setup:
+elif choice == "⚙️ Setup & Inventory":
     st.header("1. Create a New Promotion Event")
     with st.form("new_event_form"):
         event_name = st.text_input("Event Name (e.g., Summer Concert Promo)")
@@ -179,8 +226,6 @@ with tab_setup:
                 supabase.table("events").update({"status": new_status}).eq("id", selected_event_manage['id']).execute()
                 st.success(f"'{selected_manage_name}' is now {new_status}!")
                 st.rerun()
-    else:
-        st.info("No events found.")
 
     st.divider()
 
@@ -254,3 +299,55 @@ with tab_setup:
             st.info("No prizes available for this event.")
     else:
         st.warning("Please ensure an event is 'Active' before managing prizes.")
+
+# -----------------------------------------
+# VIEW: MANAGE STAFF (Super Admin Only)
+# -----------------------------------------
+elif choice == "🔐 Manage Staff":
+    st.header("Staff Management")
+    st.write("Create and remove access accounts for your team.")
+    
+    with st.form("add_user_form"):
+        st.subheader("Add New Staff Member")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            new_user = st.text_input("Username")
+        with col2:
+            new_pass = st.text_input("Password")
+        with col3:
+            new_role = st.selectbox("Role", ["PSR", "Manager"])
+            
+        if st.form_submit_button("Create Account"):
+            if new_user and new_pass:
+                # Check if username exists
+                check = supabase.table("admin_users").select("id").eq("username", new_user).execute()
+                if check.data:
+                    st.error("Username already exists. Choose another.")
+                else:
+                    supabase.table("admin_users").insert({
+                        "username": new_user,
+                        "password": new_pass,
+                        "role": new_role
+                    }).execute()
+                    st.success(f"Account for {new_user} created successfully!")
+                    st.rerun()
+            else:
+                st.error("Please fill out all fields.")
+                
+    st.divider()
+    st.subheader("Current Staff Accounts")
+    
+    users_req = supabase.table("admin_users").select("*").order("role").execute()
+    if users_req.data:
+        for u in users_req.data:
+            col1, col2, col3 = st.columns([2, 2, 1])
+            col1.write(f"👤 **{u['username']}**")
+            col2.write(f"*{u['role']}*")
+            
+            # Prevent Super Admin from deleting themselves accidentally
+            if u['role'] != 'Super Admin':
+                if col3.button("Remove Access", key=f"del_{u['id']}", type="secondary"):
+                    supabase.table("admin_users").delete().eq("id", u['id']).execute()
+                    st.rerun()
+            else:
+                col3.write("*(Master Account)*")
