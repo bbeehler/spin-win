@@ -115,20 +115,16 @@ with col2:
     except:
         st.title("Unity by Hard Rock")
 
-# 1. Fetch active or paused event
+# Fetch active or paused events
 event_response = supabase.table("events").select("*").in_("status", ["Active", "Paused"]).execute()
 
 if not event_response.data:
     st.error("There are no active promotions at this time. Please check back later!")
     st.stop()
 
-current_event = event_response.data[0]
-
-if current_event['status'] == 'Paused':
-    st.warning("⏸️ The prize wheel is temporarily paused for restocking. Please check back in a few minutes!")
-    st.stop()
-
 # Initialize session states
+if "selected_event" not in st.session_state:
+    st.session_state.selected_event = None
 if "authorized_email" not in st.session_state:
     st.session_state.authorized_email = None
 if "won_prize" not in st.session_state:
@@ -138,9 +134,37 @@ if "prize_id" not in st.session_state:
 if "spinning" not in st.session_state:
     st.session_state.spinning = False
 
-# --- THE GATEKEEPER ---
+# --- STEP 1: EVENT SELECTION ---
+if not st.session_state.selected_event:
+    st.markdown("### Select Your Event")
+    st.write("Please choose the promotion you are currently attending to get started.")
+    
+    with st.form("event_selection_form"):
+        event_dict = {e['name']: e for e in event_response.data}
+        selected_name = st.selectbox("Current Event Location", options=["-- Select an Event --"] + list(event_dict.keys()))
+        
+        submit_event = st.form_submit_button("Continue")
+        
+        if submit_event:
+            if selected_name != "-- Select an Event --":
+                st.session_state.selected_event = event_dict[selected_name]
+                st.rerun()
+            else:
+                st.error("Please select an event from the list.")
+    st.stop()
+
+current_event = st.session_state.selected_event
+
+if current_event['status'] == 'Paused':
+    st.warning("⏸️ The prize wheel for this event is temporarily paused for restocking. Please check back in a few minutes!")
+    if st.button("⬅️ Back to Event List", use_container_width=True):
+        st.session_state.selected_event = None
+        st.rerun()
+    st.stop()
+
+# --- STEP 2: THE GATEKEEPER ---
 if not st.session_state.authorized_email:
-    st.markdown("### Welcome! Verify Your Eligibility")
+    st.markdown(f"### Welcome to **{current_event['name']}**!")
     st.write("Guests are limited to one prize spin per lifetime across all Hard Rock promotional events. Enter your email to begin.")
     
     with st.form("eligibility_form"):
@@ -159,14 +183,13 @@ if not st.session_state.authorized_email:
                 st.error("Please enter a valid email address.")
     st.stop()
 
-# 2. Fetch available prizes
+# --- STEP 3: THE WHEEL ---
 prizes_response = supabase.table("prizes").select("*").eq("event_id", current_event['id']).gt("remaining_quantity", 0).execute()
 
 if not prizes_response.data:
     st.error("Wow! We have given away all our prizes for this event. Thank you for coming!")
     st.stop()
 
-# 3. Spin Logic & The Wheel
 if not st.session_state.won_prize and not st.session_state.spinning:
     if st.button("SPIN THE WHEEL", type="primary", use_container_width=True):
         st.session_state.spinning = True
@@ -198,7 +221,7 @@ elif st.session_state.spinning and "claimed" not in st.session_state:
     st.session_state.spinning = False
     st.rerun()
 
-# 4. Form Submission
+# --- STEP 4: CLAIM FORM ---
 if st.session_state.won_prize and not st.session_state.spinning and "claimed" not in st.session_state:
     st.success(f"🎉 You won: **{st.session_state.won_prize}**!")
     st.write("Enter your name below to reveal your claim pass.")
@@ -229,7 +252,7 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
             else:
                 st.error("Please enter your name to secure your prize.")
 
-# 5. Final Screenshot Screen
+# --- STEP 5: FINAL SCREENSHOT ---
 if "claimed" in st.session_state:
     st.warning("🚨 **TAKE A SCREENSHOT OF THIS PAGE NOW** 🚨")
     
@@ -238,7 +261,6 @@ if "claimed" in st.session_state:
     won_prize = st.session_state.get('won_prize', 'Unknown Prize')
     claim_code = st.session_state.get('claim_code', 'ERROR-NO-CODE')
     
-    # Safely format the dates for the screenshot
     try:
         start_str = datetime.datetime.strptime(current_event['redeem_start'], "%Y-%m-%d").strftime("%B %d, %Y")
         expiry_str = datetime.datetime.strptime(current_event['redeem_expiry'], "%Y-%m-%d").strftime("%B %d, %Y")
