@@ -254,7 +254,21 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
 
 # --- STEP 5: FINAL SCREENSHOT ---
 if "claimed" in st.session_state:
-    st.warning("🚨 **TAKE A SCREENSHOT OF THIS PAGE NOW** 🚨")
+    
+    # --- MASSIVE RED WARNING BANNER ---
+    st.markdown("""
+    <div style="background-color: #ff4b4b; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #8b0000; margin-bottom: 20px;">
+        <h2 style="color: white; margin-top: 0; margin-bottom: 10px;">🚨 STOP & SCREENSHOT 🚨</h2>
+        <p style="color: white; font-size: 16px; margin-bottom: 0;"><strong>You MUST take a screenshot of this page RIGHT NOW.</strong> <br>If you close this screen, your pass will be lost.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # --- DEVICE INSTRUCTIONS ---
+    st.info("""
+    **📱 How to take a screenshot:**
+    * **🍎 iPhone:** Press the **Side Button** + **Volume Up** together.
+    * **🤖 Android:** Press the **Power Button** + **Volume Down** together.
+    """)
     
     fname = st.session_state.get('first_name', 'Guest')
     lname = st.session_state.get('last_name', '')
@@ -277,7 +291,7 @@ if "claimed" in st.session_state:
     * **Valid For Redemption:** {validity_text}
     """)
     
-    st.info("Show this screenshot to a representative at the Unity Players Club during the valid redemption dates to claim your prize. See you on the floor!")
+    st.success("Show this screenshot to a representative at the Unity Players Club during the valid redemption dates to claim your prize. See you on the floor!")
     
     st.write("")
     if st.button("🔄 Admin: Reset for Next Test", use_container_width=True):
