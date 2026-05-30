@@ -4,6 +4,7 @@ from supabase import create_client
 import random
 import time
 import string
+import datetime
 
 # --- MOBILE-FIRST UI CONFIGURATION ---
 st.set_page_config(page_title="Unity Spin to Win", page_icon="🎸", layout="centered", initial_sidebar_state="collapsed")
@@ -36,7 +37,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Connect to database
 @st.cache_resource
 def init_connection():
     url = st.secrets["SUPABASE_URL"]
@@ -45,7 +45,6 @@ def init_connection():
 
 supabase = init_connection()
 
-# HTML/JS Code for the Visual Wheel
 def render_wheel(prize_names, winning_index):
     if len(prize_names) == 1:
         prize_names = prize_names * 4
@@ -109,7 +108,6 @@ def render_wheel(prize_names, winning_index):
     """
     components.html(html_code, height=310)
 
-# Add Logo 
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
     try:
@@ -140,7 +138,7 @@ if "prize_id" not in st.session_state:
 if "spinning" not in st.session_state:
     st.session_state.spinning = False
 
-# --- NEW: THE GATEKEEPER ---
+# --- THE GATEKEEPER ---
 if not st.session_state.authorized_email:
     st.markdown("### Welcome! Verify Your Eligibility")
     st.write("Guests are limited to one prize spin per lifetime across all Hard Rock promotional events. Enter your email to begin.")
@@ -151,24 +149,15 @@ if not st.session_state.authorized_email:
         
         if submit_check:
             if email_input:
-                # Query the entire database to see if this email has ever played
                 history_check = supabase.table("spins").select("id").eq("email", email_input).execute()
-                
                 if history_check.data:
                     st.error("🚨 It looks like you've already participated in a Spin to Win event! We'll see you on the casino floor.")
                 else:
-                    # They are clean, authorize them and refresh
                     st.session_state.authorized_email = email_input
                     st.rerun()
             else:
                 st.error("Please enter a valid email address.")
-    
-    # Stop the app from loading the wheel until they pass the gatekeeper
     st.stop()
-
-# -----------------------------------------------------
-# EVERYTHING BELOW ONLY LOADS IF THEY PASSED THE GATE
-# -----------------------------------------------------
 
 # 2. Fetch available prizes
 prizes_response = supabase.table("prizes").select("*").eq("event_id", current_event['id']).gt("remaining_quantity", 0).execute()
@@ -182,18 +171,13 @@ if not st.session_state.won_prize and not st.session_state.spinning:
     if st.button("SPIN THE WHEEL", type="primary", use_container_width=True):
         st.session_state.spinning = True
         
-        total_remaining = sum(p['remaining_quantity'] for p in prizes_response.data)
-        random_val = random.randint(1, total_remaining)
-        current_sum = 0
-        winning_prize = None
-        winning_index = 0
-        
-        for idx, p in enumerate(prizes_response.data):
-            current_sum += p['remaining_quantity']
-            if random_val <= current_sum:
-                winning_prize = p
-                winning_index = idx
-                break
+        available_prizes = [p for p in prizes_response.data if p['remaining_quantity'] > 0]
+        if not available_prizes:
+            st.error("All prizes have been claimed!")
+            st.stop()
+            
+        prize_odds = [float(p['win_probability_percent']) for p in available_prizes]
+        winning_prize = random.choices(available_prizes, weights=prize_odds, k=1)[0]
                 
         new_quantity = winning_prize['remaining_quantity'] - 1
         supabase.table("prizes").update({"remaining_quantity": new_quantity}).eq("id", winning_prize['id']).execute()
@@ -214,7 +198,7 @@ elif st.session_state.spinning and "claimed" not in st.session_state:
     st.session_state.spinning = False
     st.rerun()
 
-# 4. Form Submission (Updated to remove email, since we already have it)
+# 4. Form Submission
 if st.session_state.won_prize and not st.session_state.spinning and "claimed" not in st.session_state:
     st.success(f"🎉 You won: **{st.session_state.won_prize}**!")
     st.write("Enter your name below to reveal your claim pass.")
@@ -228,7 +212,6 @@ if st.session_state.won_prize and not st.session_state.spinning and "claimed" no
             if first_name and last_name:
                 unique_code = "HR-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
                 
-                # Insert the spin using the authorized email from step 1
                 supabase.table("spins").insert({
                     "event_id": current_event['id'],
                     "first_name": first_name,
@@ -255,12 +238,26 @@ if "claimed" in st.session_state:
     won_prize = st.session_state.get('won_prize', 'Unknown Prize')
     claim_code = st.session_state.get('claim_code', 'ERROR-NO-CODE')
     
+    # Safely format the dates for the screenshot
+    try:
+        start_str = datetime.datetime.strptime(current_event['redeem_start'], "%Y-%m-%d").strftime("%B %d, %Y")
+        expiry_str = datetime.datetime.strptime(current_event['redeem_expiry'], "%Y-%m-%d").strftime("%B %d, %Y")
+        validity_text = f"{start_str} to {expiry_str}"
+    except:
+        validity_text = "See Players Club for details."
+    
     st.markdown(f"""
     ### Your Claim Pass
     * **Claim Code:** `{claim_code}`
     * **Name:** {fname} {lname}
     * **Prize Won:** {won_prize}
     * **Event:** {current_event['name']}
+    * **Valid For Redemption:** {validity_text}
     """)
     
-    st.info("Show this screenshot to a representative at the Unity Players Club to redeem your prize and complete your membership signup. See you on the floor!")
+    st.info("Show this screenshot to a representative at the Unity Players Club during the valid redemption dates to claim your prize. See you on the floor!")
+    
+    st.write("")
+    if st.button("🔄 Admin: Reset for Next Test", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
